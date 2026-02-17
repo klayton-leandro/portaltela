@@ -1,0 +1,157 @@
+services:
+  # MongoDB - Banco de dados para armazenar notícias
+  mongodb:
+    image: mongo:7.0
+    container_name: news_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    environment:
+      - MONGO_INITDB_DATABASE=news_feed_db
+    networks:
+      - news_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - Broker para Celery
+  redis:
+    image: redis:7-alpine
+    container_name: news_redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"  # Porta externa 6380 para evitar conflito
+    volumes:
+      - redis_data:/data
+    networks:
+      - news_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API FastAPI
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/
+      - MONGODB_DB=news_feed_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - WORDPRESS_URL=http://host.docker.internal:8080
+      - WORDPRESS_API_KEY=
+      - LM_API_URL=http://host.docker.internal:1234/api/v1/chat
+      - LM_API_TOKEN=${LM_API_TOKEN:-}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - news_network
+    command: uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker - Fila de processamento
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news_celery_worker
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/
+      - MONGODB_DB=news_feed_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - WORDPRESS_URL=http://host.docker.internal:8080
+      - WORDPRESS_API_KEY=
+      - LM_API_URL=http://host.docker.internal:1234/api/v1/chat
+      - LM_API_TOKEN=${LM_API_TOKEN:-}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - news_network
+    # Windows: usa solo mode; Linux pode usar prefork
+    # -Q celery,news: consome das filas celery (padrão) e news (processamento)
+    command: celery -A workers.celery_app worker --loglevel=info --pool=solo -Q celery,news
+
+  # Celery Worker Publish - Dedicado para publicação WordPress
+  celery-worker-publish:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news_celery_publish
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/
+      - MONGODB_DB=news_feed_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - WORDPRESS_URL=http://host.docker.internal:8080
+      - WORDPRESS_API_KEY=
+      - LM_API_URL=http://host.docker.internal:1234/api/v1/chat
+      - LM_API_TOKEN=${LM_API_TOKEN:-}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - news_network
+    command: celery -A workers.celery_app worker --loglevel=info --pool=solo -Q publish
+
+  # Flower - Dashboard de monitoramento Celery
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news_flower
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - news_network
+    command: celery -A workers.celery_app flower --port=5555 --broker=redis://redis:6379/0
+
+volumes:
+  mongodb_data:
+    name: news_mongodb_data
+  mongodb_config:
+    name: news_mongodb_config
+  redis_data:
+    name: news_redis_data
+
+networks:
+  news_network:
+    name: news_network
+    driver: bridge

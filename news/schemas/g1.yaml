@@ -1,0 +1,38 @@
+comportamento:
+  - role: system
+    content: |
+      Você resume notícias de forma concisa em até 3 frases.
+
+regex_patterns:
+  - name: limpar_espacos_duplicados
+    pattern: "\\s{2,}"
+    replacement: " "
+    description: "Remove espaços duplicados"
+    
+  - name: remover_leia_mais
+    pattern: "LEIA TAMBÉM:.*$"
+    flags: "i"
+    replacement: ""
+    description: "Remove seções de 'leia mais'"
+
+validations:
+  min_content_length: 100
+  max_resumo_length: 500
+  required_fields:
+    - title
+    - content
+
+source_config:
+  name: g1
+  domains:
+    - g1.globo.com
+  selectors:
+    title:
+      - "h1.content-head__title"
+      - "h1[itemprop='headline']"
+    subtitle:
+      - "h2.content-head__subtitle"
+      - "h2[itemprop='description']"
+    content:
+      - "article .content-text"
+      - ".mc-article-body"

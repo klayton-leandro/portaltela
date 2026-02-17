@@ -1,11 +1,9 @@
 import sys
 import os
 import uvicorn
-from core.logging import log
-from workers.celery_app import celery_app
-from core.logging import log
 import subprocess
-import sys
+
+from workers.celery_app import celery_app
 from core.logging import log
 
 
